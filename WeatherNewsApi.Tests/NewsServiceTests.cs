@@ -1,5 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -58,6 +60,26 @@ namespace WeatherNewsApi.Tests
             var service = new NewsService(db, NullLogger<NewsService>.Instance);
 
             await Assert.ThrowsAsync<ArgumentNullException>(() => service.AddAsync(null!));
+        }
+
+        [Fact]
+        public async Task TaskAddSync_ShouldLogErrorMessage_WhenItemIsNull()
+        {
+            var db = GetDatabase();
+            // create a mock logger
+            var mockLogger = new Mock<ILogger<NewsService>>();
+            var service = new NewsService(db, mockLogger.Object);
+
+            await Assert.ThrowsAsync<ArgumentNullException>(() => service.AddAsync(null!));
+
+            mockLogger.Verify(
+                x => x.Log(
+                    LogLevel.Error,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("null")),
+                    It.IsAny<Exception>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Once);
         }
     }
 }

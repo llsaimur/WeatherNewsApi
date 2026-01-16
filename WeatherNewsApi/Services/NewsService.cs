@@ -15,7 +15,7 @@ namespace WeatherNewsApi.Services
             _logger = logger;
         }
 
-        public async Task<List<NewsResponse>> GetAllAsync() => await _context.NewsItems
+        public virtual async Task<List<NewsResponse>> GetAllAsync() => await _context.NewsItems
             .Select(item => new NewsResponse(item.Id, item.Title, item.Content, item.PublishedAt))
             .ToListAsync();
 

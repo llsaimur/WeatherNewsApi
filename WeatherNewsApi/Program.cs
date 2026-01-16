@@ -2,15 +2,23 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using Serilog.Events;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using WeatherNewsApi;
 using WeatherNewsApi.Data;
+using WeatherNewsApi.Models.DTOs;
 using WeatherNewsApi.Services;
 
 Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning) // hides "noise" from .NET logs
+    .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithThreadId()
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File("logs/news-api-.txt", rollingInterval: RollingInterval.Day)
     .CreateLogger();
 
@@ -31,6 +39,12 @@ try
     builder.Services.AddSqlite<AppDbContext>(connectionString);
     builder.Services.AddScoped<NewsService>();
     builder.Services.AddProblemDetails();
+    builder.Services.AddScoped<ExternalWeatherService>();
+
+    builder.Services.AddHttpClient("OpenWeather", client =>
+    {
+        client.BaseAddress = new Uri("https://api.openweathermap.org/data/2.5/");
+    });
 
     var secretKey = builder.Configuration["Authentication:SecretKey"];
 
@@ -54,84 +68,70 @@ try
 
     var app = builder.Build();
 
-    //app.Use(async (context, next) =>
-    //{
-    //    string secretId = context.Request.Query["id"];
-    //    if (secretId != "123")
-    //    {
-    //        context.Response.StatusCode = 403;
+    // 1. safety net
+    app.UseExceptionHandler();
+    app.UseSerilogRequestLogging(options =>
+    {
+        options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
 
-    //        await context.Response.WriteAsync("Invalid secret id!");
-    //    }
-    //    else
-    //    {
-    //        context.Response.Headers.Append("X-Brother-Status", "Learning");
+        // to help Serilog map the "Path" and "Method" properties
+        options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+        {
+            diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+            diagnosticContext.Set("RequestScheme", httpContext.Request.Scheme);
+        };
+    });
 
-    //        await next();
-    //    }
-    //});
-
-    //app.MapGet("/hello", () => "Hello World!");
-
-    app.UseAuthentication();
-    app.UseAuthorization();
-
-
-
-    // Configure the HTTP request pipeline.
+    // 2. logging and diagnostics
     if (app.Environment.IsDevelopment())
     {
         app.UseSwagger();
         app.UseSwaggerUI();
+
+        // shows detailed erros only for you
         app.UseDeveloperExceptionPage();
-        app.UseStatusCodePages();
     }
 
-    app.UseExceptionHandler();
+    app.UseStatusCodePages(); // turns 404s/401s int problem details responses
 
+    // 3. security and routing
     app.UseHttpsRedirection();
-
-    //var summaries = new[]
-    //{
-    //    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-    //};
-
-    //app.MapGet("/weatherforecast", () =>
-    //{
-    //    var forecast =  Enumerable.Range(1, 5).Select(index =>
-    //        new WeatherForecast
-    //        (
-    //            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-    //            Random.Shared.Next(-20, 55),
-    //            summaries[Random.Shared.Next(summaries.Length)]
-    //        ))
-    //        .ToArray();
-    //    return forecast;
-    //})
-    //.WithName("GetWeatherForecast")
-    //.WithOpenApi();
-
-    //var news = new List<NewsItem>
-    //{
-    //    new NewsItem { Id = 1, Title = "Modern .NET is Fast", Content = "...", PublishedAt = DateTime.Now }
-    //};
+    app.UseAuthentication();
+    app.UseAuthorization();
 
     app.Use(async (context, next) =>
     {
         string secretId = context.Request.Query["secretId"];
 
-        if (secretId != "123")
+        using (Serilog.Context.LogContext.PushProperty("ClientSecretId", secretId))
         {
-            context.Response.StatusCode = 403;
 
-            await context.Response.WriteAsync("Invalid secret id!");
-        }
-        else
-        {
+            if (secretId != "123")
+            {
+                Log.Warning("Request with invalid secret id: {SecretId}", secretId);
+                context.Response.StatusCode = 403;
+
+                await context.Response.WriteAsync("Invalid secret id!");
+
+                return;
+            }
+
             await next();
         }
 
     });
+
+    // test endpoint
+    //app.MapGet("/weather/{city}", async (string city, ExternalWeatherService weatherService) =>
+    //{
+    //    OpenWeatherResponse weather = await weatherService.GetLiveWeatherAsync(city);
+
+    //    if (weather == null)
+    //    {
+    //        return Results.NotFound($"Could not find weather for {city}");
+    //    }
+    //    return Results.Ok(weather);
+    //});
 
     app.MapPost("/login", (LoginRequest user) =>
     {
@@ -170,7 +170,28 @@ try
         return Results.Unauthorized();
     });
 
-    app.MapGet("/news", async (NewsService service) => await service.GetAllAsync());
+    app.MapGet("/news", async (NewsService newsService, ExternalWeatherService weatherService) => 
+    {
+        var newsTask = newsService.GetAllAsync();
+
+        var weatherTask = weatherService.GetLiveWeatherAsync("London");
+
+        await Task.WhenAll(newsTask, weatherTask);
+
+        var news = await newsTask;
+        var weather = await weatherTask;
+
+        string summary = weather != null
+            ? $"It's {weather.Weather[0].Description} in {weather.Name} with a temperature of {weather.Main.Temp}K."
+            : "Weather data is unavailable.";
+
+        return Results.Ok(new NewsWeatherResponse
+        {
+            News = news,
+            WeatherSummary = summary,
+            Temperature = weather?.Main.Temp ?? 0
+        });
+    });
 
     app.MapPost("/news", async (CreateNewsRequest request, NewsService service) =>
     {

@@ -3,7 +3,6 @@
 [![Framework](https://img.shields.io/badge/Framework-.NET%208-blue.svg)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
 [![Database](https://img.shields.io/badge/Database-SQLite-green.svg)](https://www.sqlite.org/index.html)
 [![Test](https://img.shields.io/badge/Testing-xUnit-orange.svg)](https://xunit.net/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 This project is a demonstration of a modern, clean-architecture REST API built with **.NET 8**. It serves as a portfolio piece to showcase my understanding of dependency injection, service-layer patterns, automated testing, and defensive programming in the C# ecosystem.
 

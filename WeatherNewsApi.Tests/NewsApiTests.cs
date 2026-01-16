@@ -1,7 +1,10 @@
-﻿using Microsoft.AspNetCore.Mvc.Testing;
+﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Moq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,15 +13,18 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Threading.Tasks;
 using WeatherNewsApi.Data;
+using WeatherNewsApi.Services;
 
 namespace WeatherNewsApi.Tests
 {
     public class NewsApiTests : IClassFixture<WebApplicationFactory<Program>>
     {
         private readonly HttpClient _client;
+        private readonly WebApplicationFactory<Program> _factory;
 
         public NewsApiTests(WebApplicationFactory<Program> factory)
         {
+            _factory = factory;
             _client = factory.WithWebHostBuilder(builder =>
             {
                 builder.ConfigureAppConfiguration((context, config) =>
@@ -108,6 +114,42 @@ namespace WeatherNewsApi.Tests
             var response = await _client.SendAsync(request);
 
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task GetNews_WhenServiceThrowsException_ReturnsCleanJsonError()
+        {
+            // setup the sabotaged factory
+            var sabotagedFactory = _factory.WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureServices(services =>
+                {
+                    // replace NewsService with a sabotaged version
+                    var descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(NewsService));
+                    if (descriptor != null) services.Remove(descriptor);
+
+                    // create a mock that throws exception when GetAllAsync is called
+                    var mockDb = new Mock<AppDbContext>(new DbContextOptions<AppDbContext>()).Object;
+                    var mockLogger = new Mock<ILogger<NewsService>>().Object;  
+                    var mockService = new Mock<NewsService>(mockDb, mockLogger);
+                    mockService.Setup(s => s.GetAllAsync()).ThrowsAsync(new Exception("Simulated service failure"));
+
+                    // inject mock instead of real service
+                    services.AddScoped(_ => mockService.Object);
+                });
+            });
+
+            var client = sabotagedFactory.CreateClient();
+
+            var response = await client.GetAsync("/news?secretId=123");
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+
+
+            var error = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+            Assert.NotNull(error);
+            Assert.Equal(500, error!.Status);
+            Assert.Equal("Internal Server Error. Please try again later.", error.Title);
         }
     }
 }

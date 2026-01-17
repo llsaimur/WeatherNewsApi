@@ -34,12 +34,18 @@ try
     // Add services to the container.
     // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
     builder.Services.AddEndpointsApiExplorer();
-    builder.Services.AddSwaggerGen();
+    builder.Services.AddSwaggerGen(options =>
+    {
+        var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+        var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+        options.IncludeXmlComments(xmlPath);
+    });
     var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
     builder.Services.AddSqlite<AppDbContext>(connectionString);
     builder.Services.AddScoped<NewsService>();
     builder.Services.AddProblemDetails();
     builder.Services.AddScoped<ExternalWeatherService>();
+    builder.Services.AddHealthChecks();
 
     builder.Services.AddHttpClient("OpenWeather", client =>
     {
@@ -121,17 +127,7 @@ try
 
     });
 
-    // test endpoint
-    //app.MapGet("/weather/{city}", async (string city, ExternalWeatherService weatherService) =>
-    //{
-    //    OpenWeatherResponse weather = await weatherService.GetLiveWeatherAsync(city);
-
-    //    if (weather == null)
-    //    {
-    //        return Results.NotFound($"Could not find weather for {city}");
-    //    }
-    //    return Results.Ok(weather);
-    //});
+    app.MapHealthChecks("/health");
 
     app.MapPost("/login", (LoginRequest user) =>
     {
@@ -170,6 +166,16 @@ try
         return Results.Unauthorized();
     });
 
+    /// <summary>
+    /// Retrieves the latest news items along with live weather data for London.
+    /// </summary>
+    /// <remarks>
+    /// This endpoint calls the OpenWeather API in parallel with the database query
+    /// to provide a fast, combined response.
+    /// </remarks>
+    /// <returns>
+    /// A combined object containing news items and weather summary.
+    /// </returns>
     app.MapGet("/news", async (NewsService newsService, ExternalWeatherService weatherService) => 
     {
         var newsTask = newsService.GetAllAsync();
